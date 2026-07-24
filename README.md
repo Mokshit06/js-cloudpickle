@@ -1,5 +1,7 @@
 # cloudpickle-js
 
+![cloudpickle-js: functions that travel with their closures](.github/cover.png)
+
 You can't serialize a function in JavaScript:
 
 ```js
