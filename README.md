@@ -1,25 +1,57 @@
 # cloudpickle-js
 
-[cloudpickle](https://github.com/cloudpipe/cloudpickle), but for JavaScript.
+JavaScript can't serialize a function. `JSON.stringify` drops it,
+`structuredClone` throws `DataCloneError`, `postMessage` refuses it. So you
+can't hand a worker a callback, or send a closure over the wire — you send data
+and keep the code on both sides.
 
-Serialize things standard serializers can't: **functions with the closures they
-capture**, classes, instances, and arbitrary cyclic object graphs — by value —
-so they can be shipped to and executed by another Node.js process.
+`cloudpickle-js` serializes functions **together with the variables they
+captured**, plus classes, live instances and cyclic object graphs, into a JSON
+payload another thread or process can load and run. (It's a port of Python's
+[cloudpickle](https://github.com/cloudpipe/cloudpickle), which does the same
+thing for `multiprocessing` and Spark.)
 
 ```js
-import { dumps, loads } from 'cloudpickle-js';
+// main.js
+import { Worker } from 'node:worker_threads';
+import { dumps } from 'cloudpickle-js';
 
-const rates = { usd: 1, eur: 0.9 };
-function makeConverter(target) {
-  return (amount) => amount * rates[target]; // closes over `rates` and `target`
+const factor = 3;
+const scale = (xs) => xs.map((x) => x * factor); // captures `factor`
+
+new Worker('./worker.js', { workerData: dumps(scale) });
+```
+
+```js
+// worker.js
+import { workerData, parentPort } from 'node:worker_threads';
+import { loads } from 'cloudpickle-js';
+
+const scale = loads(workerData);
+parentPort.postMessage(scale([1, 2, 3])); // [3, 6, 9] — `factor` came along
+```
+
+State comes along too, and stays live: closures keep their variables, not
+copies of their values.
+
+```js
+function makeCounter() {
+  let n = 0;
+  return () => ++n;
 }
 
-const payload = dumps(makeConverter('eur')); // a JSON string
+const count = makeCounter();
+count(); count();               // 2
 
-// ...in a completely different process:
-const convert = loads(payload);
-convert(150); // => 135
+const revived = loads(dumps(count));
+revived();                      // 3 — it resumes where the original was
 ```
+
+Same for a half-finished object graph: a memo cache arrives warm, a
+half-trained model keeps training, and live class instances rebuild with their
+prototypes intact — `instanceof` still holds, methods and `super` calls still
+work, and the fight they were in the middle of finishes in the other process.
+`node demos/crazy.mjs` runs all of those in freshly spawned `node` processes.
 
 ## How it works
 
